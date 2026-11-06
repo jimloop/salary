@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>薪酬计算助手</title>
+  <link rel="stylesheet" href="./prototype.css">
+  <script src="./import-fields.js"></script>
+  <script defer src="./prototype.js"></script>
+  <script defer src="./pages.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar"><div class="product"><strong>薪酬计算助手</strong></div><p class="side-label">当前工作空间</p><div class="entity-switcher"><button class="entity" id="entityToggle" type="button" data-action="toggle-subject-menu" aria-haspopup="menu" aria-expanded="false" aria-controls="entityMenu"><span class="entity-avatar" id="entityAvatar">云</span><span><strong id="prototypeEntityName">云杉科技</strong><small id="prototypeEntityTax">税号末位 · 3482</small></span><b aria-hidden="true">⌄</b></button><div class="entity-menu" id="entityMenu" role="menu" aria-label="选择主体" hidden></div></div><div class="workspace-lock"><span class="green-dot"></span>已解锁 · 仅当前主体可见</div><div class="search">⌕ <span>搜索当前主体的员工、批次或规则</span><kbd>/</kbd></div><p class="side-label nav-heading">工作流程</p><nav id="mainNav"><button data-page="overview" class="active"><span>◫</span>工作台</button><button data-page="employees"><span>♙</span>员工与薪酬方案</button><button data-page="items"><span>▤</span>工资项目</button><button data-page="import"><span>⇧</span>数据导入 <em></em></button><button data-page="rules"><span>ƒ</span>规则配置</button><button data-page="payroll"><span>≋</span>月薪计算</button><button data-page="bonus"><span>◇</span>年终奖计算</button><button data-page="employee"><span>♙</span>员工计算明细</button><button data-page="history"><span>◷</span>版本与异常</button><button data-page="export"><span>⇩</span>导出与备份</button></nav><div class="side-tip"><span>ⓘ</span><div><strong>本地离线工作</strong><p>薪酬资料保存在当前主体的加密工作空间。</p></div></div></aside>
+    <main class="main"><div class="content"><div class="heading"><div><div class="eyebrow">PAYROLL WORKSPACE</div><h1 id="title">工作台</h1><p id="subtitle">聚焦当前主体的导入、规则和计算状态。</p></div><div id="headingActions"></div></div><section id="view" aria-live="polite"></section></div></main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div id="prototypeModal" class="prototype-modal" hidden><div class="prototype-dialog" role="dialog" aria-modal="true" aria-labelledby="prototypeModalTitle"><div class="section-head"><h2 id="prototypeModalTitle">新增</h2><button class="icon-button" data-action="close-prototype-modal" aria-label="关闭">×</button></div><div id="prototypeModalBody"></div><div class="actions modal-footer"><button class="btn" data-action="close-prototype-modal">取消</button><button class="btn primary" id="prototypeModalSave">保存</button></div></div></div>
+</body>
+</html>

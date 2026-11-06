@@ -1,0 +1,37 @@
+export type Subject = { id: string; name: string; tax_suffix: string; region:string; last_opened_at:number|null };
+export type Page<T> = { records: T[]; total: number; page: number; page_size: number };
+export type Employee = { id: string; name: string; department: string; cost_center: string; kind: string; hire_date: string; leave_date: string; base_salary: string; effective_from: string };
+export type SalaryPlan = { id:string;employee_id:string;effective_from:string;effective_to:string|null;base_salary:string;note:string };
+export type Item = {source?:'default'|'custom'|'rule';rule_kind?:string;formula?:string;editable_rule?:boolean; code: string; name: string; category: string; tax_attribute: string; social_attribute: string; rounding: string };
+export type Rule = { code: string; label: string; expression: string; valid_from: string; valid_to: string | null; region: string | null; source: string; version: number; status: 'Draft' | 'PendingValidation' | 'Active' };
+export type RulePackPreview = {rules:Rule[];conflicts:string[]};
+export type Section = 'subjects'|'overview'|'employees'|'items'|'rules'|'imports'|'payroll'|'bonus'|'results'|'history'|'exports';
+export type TaxBaseline = { cumulative_income:string; cumulative_exempt_income:string; cumulative_basic_deduction:string; cumulative_special_deduction:string; cumulative_additional_deduction:string; cumulative_other_deduction:string; cumulative_tax_relief:string; cumulative_withheld_tax:string };
+export type MonthlyRequest = {region?:string; employee_id:string; period:string; payout_month:string; standard_days:string; actual_days:string; performance:string; adjustment:string; employee_deductions:string; employer_contributions:string; tax_baseline:TaxBaseline|null; basic_deduction:string|null; additional_deduction:string|null; other_deduction:string|null; exempt_income:string|null;tax_relief:string|null };
+export type MonthlySnapshot = {applied_rules?:Rule[]; id:string; subject_id:string; employee_id:string; period:string; payout_month:string; fixed_salary:string; performance:string; adjustment:string; result:{gross:string;employee_deductions:string;withholding:{current_withholding:string;cumulative_taxable_base:string}|null;net:string|null;employer_cost:string};input:MonthlyRequest;rule_trace:{code:string;expression:string;inputs:Record<string,string>;result:string}[] };
+export type BatchRequest = { period:string;payout_month:string;region:string;basic_deduction:string;other_deduction:string;exempt_income:string;tax_relief:string };
+export type BatchResult = { run_id:string;run_version:number;version_ids:string[];warnings:string[] };
+export type CalculationRun = { id:string;subject_id:string;period:string;payout_month:string;version:number;kind:string;created_at:number;version_ids:string[] };
+export type ImportKind = 'employees'|'attendance'|'performance'|'adjustments'|'tax_history'|'social'|'historical_payroll'|'salary_plans'|'bonus';
+export type ImportPreview = { filename:string; sha256:string; sheets:{name:string;headers:string[];sample:string[][];row_count:number;formula_count:number}[] };
+export type ImportCheck = { total_rows:number;error_count:number;errors:{sheet:string;row:number;field:string;reason:string}[] };
+export type ImportBatch = { id:string;subject_id:string;filename:string;sha256:string;sheet:string;kind:string;row_count:number;withdrawn_at:number|null };
+export type InferenceReport = { filename:string;sha256:string;analyzed_rows:number;skipped_rows:number;candidates:{expression:string;matched:number;total:number;confidence:'Matched'|'Ambiguous'|'Insufficient';evidence:string;differences:{employee_id:string;row_number:number;observed:string;calculated:string|null}[]}[] };
+export type BonusScheme={id:string;name:string;year:string;budget:string;plan_days:number;minimum:string|null;maximum:string|null};
+export type BonusRequest = {scheme_id?:string|null; employee_id:string;payout_month:string;target:string;performance_factor:string;eligible_days:number;plan_days:number;minimum:string|null;maximum:string|null;tax_baseline:TaxBaseline|null;selected_method:'separate'|'combined'|null };
+export type BonusSnapshot = {scheme?:BonusScheme|null;id:string;subject_id:string;request:BonusRequest;amount:{before_limits:string;awarded:string};tax_comparison:{separate:string;combined_increment:string}|null;selected_tax:string|null;net:string|null;policy_source:string};
+export type VersionDiff = { left_id:string;right_id:string;employee_id:string;gross_delta:string;net_delta:string|null;changed_inputs:string[] };
+export type AuditEntry = { id:string;timestamp:number;action:string;target:string };
+
+export type DataFilter={period:string;payout_month:string;year:string;employee_id:string;batch_id?:string};
+export type ImportedDataRow={batch_id:string;filename:string;kind:string;sheet:string;row:number;fields:Record<string,string>};
+export type UploadStatus={kind:string;row_count:number;batch_count:number;employee_count:number;duplicate_count:number;totals:Record<string,{value:string;missing_count:number}>};
+export type EffectiveRule={rule:Rule;is_default:boolean;editable:boolean;inactive_versions:number};
+export type WorkStep={label:string;state:'done'|'warning'|'pending';detail:string;target:Section};
+export type WorkProgress={employee_count:number;import_batch_count:number;default_rule_count:number;custom_rule_count:number;calculated_count:number;version_count:number;stale_count:number;anomaly_count:number;exported_count:number;steps:WorkStep[];issues:{message:string;target:Section}[]};
+
+export type CalculationEmployee={employee_id:string;name:string;department:string;kind:string;version_count:number;latest:MonthlySnapshot};
+export type EmployeeVersions={employee_id:string;name:string;department:string;kind:string;versions:MonthlySnapshot[]};
+export type SalaryMetricDiff={label:string;before:string|null;after:string|null;delta:string|null};
+export type RunComparison={rows:{employee_id:string;name:string;status:'changed'|'same'|'incomplete'|'added'|'removed';metrics:SalaryMetricDiff[]}[];totals:{label:string;before:string;after:string;delta:string|null;missing_before:number;missing_after:number}[]};
+export type EmployeeImportData={employee:Employee|null;groups:Record<string,ImportedDataRow[]>};

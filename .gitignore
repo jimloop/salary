@@ -1,0 +1,42 @@
+.venv/
+.build-cache/
+build/
+dist/
+__pycache__/
+*.pyc
+desktop/src-tauri/target/
+desktop/frontend/node_modules/
+desktop/frontend/dist/
+.tools/
+crates/*/target/
+.DS_Store
+
+# Generated frontend and Tauri files
+*.tsbuildinfo
+desktop/src-tauri/gen/
+
+# Local exports, installer packages and review screenshots
+outputs/
+*.dmg
+*.exe
+*.msi
+*.app/
+prototype/*preview*.png
+tests/fixtures/manual-*/
+tests/fixtures/*手动测试资料*.zip
+tests/fixtures/*手动测试资料/
+
+# Local workspace data and secrets
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.salarybackup
+*.pem
+*.key
+*.p12
+*.pfx

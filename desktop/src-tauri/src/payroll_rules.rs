@@ -1,0 +1,32 @@
+use crate::app_commands::AppState;
+use payroll_core::{rules::{Rule,RuleStatus,RuleTrace,execute_payroll},Decimal};
+use payroll_storage::{Collection,Session};
+use serde::Serialize;
+use std::collections::{BTreeMap,BTreeSet};
+use tauri::State;
+const INPUTS:[&str;7]=["base_salary","standard_days","actual_days","performance","adjustment","employee_contribution","employer_contribution"];
+pub fn defaults()->Vec<Rule>{[
+ ("fixed_salary","计薪固定薪","base_salary / standard_days * actual_days"),
+ ("performance_pay","绩效奖金","performance"),("adjustment_pay","补发补扣","adjustment"),
+ ("employee_deductions","员工社保公积金承担","employee_contribution"),("employer_contributions","单位社保公积金承担","employer_contribution"),
+ ("gross","应发工资","fixed_salary + performance_pay + adjustment_pay")
+].into_iter().map(|(code,label,expression)|Rule{code:code.into(),label:label.into(),expression:expression.into(),valid_from:"1900-01-01".into(),valid_to:None,region:None,source:"应用内置固定薪规则；输入值由当前主体核实".into(),version:0,status:RuleStatus::Active}).collect()}
+pub fn all(session:&Session)->Result<Vec<Rule>,String>{let mut result=Vec::new();let mut page=1;loop{let rows=session.page::<Rule>(Collection::Rules,page,100)?;result.extend(rows.records);if page as u64*100>=rows.total{break}page+=1}Ok(result)}
+pub fn selected(configured:&[Rule],date:&str,region:&str)->Vec<Rule>{let mut latest=BTreeMap::<String,Rule>::new();for rule in configured{if !["withholding","net","employer_cost"].contains(&rule.code.as_str())&&rule.status==RuleStatus::Active&&rule.valid_from.as_str()<=date&&rule.valid_to.as_deref().is_none_or(|end|date<=end)&&rule.region.as_deref().is_none_or(|value|value==region)&&latest.get(&rule.code).is_none_or(|old|rule.version>old.version){latest.insert(rule.code.clone(),rule.clone());}}for rule in defaults(){latest.entry(rule.code.clone()).or_insert(rule);}latest.into_values().collect()}
+pub fn validate_configured(rules:&[Rule])->Result<(),String>{if rules.iter().any(|rule|["withholding","net","employer_cost"].contains(&rule.code.as_str())){return Err("个税、实发与单位成本由税费汇总流程计算，不能以普通项目公式覆盖".into());}let mut merged:BTreeMap<String,Rule>=defaults().into_iter().map(|rule|(rule.code.clone(),rule)).collect();for rule in rules{merged.insert(rule.code.clone(),rule.clone());}payroll_core::rules::validate(&merged.into_values().collect::<Vec<_>>(),&INPUTS.into_iter().map(String::from).collect::<BTreeSet<_>>())?;Ok(())}
+pub struct WageValues{pub fixed:Decimal,pub performance:Decimal,pub adjustment:Decimal,pub deductions:Decimal,pub employer:Decimal,pub gross:Decimal,pub trace:Vec<RuleTrace>}
+pub fn calculate(rules:&[Rule],fields:&BTreeMap<String,Decimal>,date:&str,region:&str)->Result<WageValues,String>{let (values,trace)=execute_payroll(rules,fields,date,region)?;let get=|key:&str|values.get(key).copied().ok_or_else(||format!("缺少计算节点 {key}"));Ok(WageValues{fixed:get("fixed_salary")?,performance:get("performance_pay")?,adjustment:get("adjustment_pay")?,deductions:get("employee_deductions")?,employer:get("employer_contributions")?,gross:get("gross")?,trace})}
+#[derive(Serialize)]pub struct EffectiveRule{pub rule:Rule,pub is_default:bool,pub editable:bool,pub inactive_versions:usize}
+#[tauri::command]pub fn payroll_effective_rules(state:State<AppState>,period:String,region:String)->Result<Vec<EffectiveRule>,String>{state.with_session(|session|{
+ let date=format!("{period}-01");chrono::NaiveDate::parse_from_str(&date,"%Y-%m-%d").map_err(|_|"所属期格式错误")?;let configured=all(session)?;let region=if region.is_empty(){session.subject.region.as_str()}else{region.as_str()};let effective=selected(&configured,&date,region);let mut result:Vec<EffectiveRule>=effective.into_iter().map(|rule|{let inactive_versions=configured.iter().filter(|candidate|candidate.code==rule.code&&(candidate.status!=RuleStatus::Active||candidate.version!=rule.version)).count();EffectiveRule{is_default:rule.version==0,rule,editable:true,inactive_versions}}).collect();
+ for (code,label,formula) in [("withholding","预估个税","累计应纳税所得额按累计预扣率计算，扣减累计减免税额及历史实际已预扣税额；资料不足时不可准确测算"),("net","预估实发","应发工资 − 员工承担 − 本期预扣个税"),("employer_cost","单位总成本","应发工资 + 单位社保公积金承担")]{result.push(EffectiveRule{rule:Rule{code:code.into(),label:label.into(),expression:formula.into(),valid_from:"1900-01-01".into(),valid_to:None,region:None,source:"应用内置税费及汇总流程".into(),version:0,status:RuleStatus::Active},is_default:true,editable:false,inactive_versions:0});}Ok(result)
+})}
+
+#[cfg(test)]mod tests{
+ use super::*;
+ fn fields()->BTreeMap<String,Decimal>{BTreeMap::from([("base_salary".into(),Decimal::from(10000)),("standard_days".into(),Decimal::from(22)),("actual_days".into(),Decimal::from(21)),("performance".into(),Decimal::from(1000)),("adjustment".into(),Decimal::ZERO),("employee_contribution".into(),Decimal::from(800)),("employer_contribution".into(),Decimal::from(1200))])}
+ fn custom()->Rule{Rule{code:"fixed_salary".into(),label:"自定义固定薪".into(),expression:"base_salary / 2".into(),valid_from:"2026-10-01".into(),valid_to:Some("2026-10-31".into()),region:Some("上海".into()),source:"测试制度".into(),version:1,status:RuleStatus::Active}}
+ #[test]fn default_rules_round_projects_before_gross_and_keep_trace(){let rules=selected(&[],"2026-10-01","上海");assert_eq!(rules.len(),6);let result=calculate(&rules,&fields(),"2026-10-01","上海").unwrap();assert_eq!(result.fixed,Decimal::new(954545,2));assert_eq!(result.gross,Decimal::new(1054545,2));assert_eq!(result.trace.len(),6);assert_eq!(result.deductions,Decimal::from(800));}
+ #[test]fn confirmed_custom_rule_replaces_default_only_in_matching_scope(){let rule=custom();let active=selected(&[rule.clone()],"2026-10-01","上海");assert_eq!(active.iter().find(|value|value.code=="fixed_salary").unwrap().version,1);assert_eq!(calculate(&active,&fields(),"2026-10-01","上海").unwrap().gross,Decimal::from(6000));for (date,region) in [("2026-09-01","上海"),("2026-11-01","上海"),("2026-10-01","杭州")]{let rules=selected(&[rule.clone()],date,region);assert_eq!(rules.iter().find(|value|value.code=="fixed_salary").unwrap().version,0);}}
+ #[test]fn draft_does_not_hide_active_rule_and_default_dependencies_are_validated(){let active=custom();let mut draft=active.clone();draft.version=2;draft.status=RuleStatus::Draft;let rules=selected(&[active,draft],"2026-10-01","上海");assert_eq!(rules.iter().find(|value|value.code=="fixed_salary").unwrap().version,1);let mut bad=custom();bad.expression="gross".into();assert!(validate_configured(&[bad]).unwrap_err().contains("循环"));}
+}

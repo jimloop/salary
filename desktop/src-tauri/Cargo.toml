@@ -1,0 +1,30 @@
+[package]
+name = "salary-assistant-desktop"
+version = "0.3.12"
+description = "Salary Assistant desktop app"
+authors = ["SalaryAssistant"]
+edition = "2021"
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+rust_decimal = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+zeroize = "1"
+payroll-core = { path = "../../crates/payroll-core" }
+payroll-storage = { path = "../../crates/payroll-storage" }
+uuid = { version = "1", features = ["v4"] }
+payroll-import = { path = "../../crates/payroll-import" }
+tauri-plugin-dialog = "2"
+csv = "1.4"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
+chrono = "0.4"
