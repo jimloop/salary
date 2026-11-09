@@ -10,7 +10,7 @@ use crate::export_runs::CalculationRun;
 
 #[derive(Clone,Deserialize)]
 pub struct BatchRequest { pub period:String,pub payout_month:String,pub region:String,pub basic_deduction:String,pub other_deduction:String,pub exempt_income:String,pub tax_relief:String }
-#[derive(Serialize)]
+#[derive(Serialize,Debug)]
 pub struct BatchResult { pub run_id:String,pub run_version:u32,pub version_ids:Vec<String>,pub warnings:Vec<String> }
 
 fn rows(session:&payroll_storage::Session,kind:&str)->Result<Vec<ValidatedRow>,String>{
@@ -28,43 +28,48 @@ pub(crate) fn tax_baseline(row:&ValidatedRow)->Option<TaxBaseline>{
     let n=|key|row.fields.get(key).and_then(|v|v.parse::<Decimal>().ok());
     Some(TaxBaseline{cumulative_income:n("cumulative_income")?,cumulative_exempt_income:n("cumulative_exempt_income")?,cumulative_basic_deduction:n("cumulative_basic_deduction")?,cumulative_special_deduction:n("cumulative_special_deduction")?,cumulative_additional_deduction:n("cumulative_additional_deduction")?,cumulative_other_deduction:n("cumulative_other_deduction")?,cumulative_tax_relief:n("cumulative_tax_relief")?,cumulative_withheld_tax:n("cumulative_withheld_tax")?})
 }
-pub(crate) fn salary_for(session:&payroll_storage::Session,employee:&Employee,period:&str)->Result<Decimal,String>{
-    let start=format!("{period}-01");let mut selected:Option<SalaryPlan>=None;let mut prior_plan=false;
-    {
-        for plan in crate::import_inputs::plans(session)?.into_iter().filter(|p|p.employee_id==employee.id){
-            if plan.effective_from<=start{prior_plan=true;}
-            if plan.effective_from.starts_with(period)&&plan.effective_from!=start{return Err(format!("工号 {} 在 {} 月中调薪，需分段考勤输入",employee.id,period));}
-            if plan.effective_to.as_deref().is_some_and(|end|end.starts_with(period)){return Err(format!("工号 {} 的薪酬方案在 {} 月中结束，需分段考勤输入",employee.id,period));}
-            if plan.effective_from<=start&&plan.effective_to.as_deref().is_none_or(|end|end>=start.as_str()){if selected.is_some(){return Err(format!("工号 {} 有重叠的生效薪酬方案，请核对导入批次",employee.id));}selected=Some(plan);}
-        }
+pub(crate) fn plan_for(session:&payroll_storage::Session,employee:&Employee,period:&str)->Result<SalaryPlan,String>{
+    if !payroll_core::contributions::valid_month(period){return Err("所属月份无效".into());}
+    let mut selected=None;
+    for plan in crate::import_inputs::plans(session)?.into_iter().filter(|p|p.employee_id==employee.id){
+        if plan.effective_from.get(..7).is_some_and(|start|start>period)||plan.effective_to.as_deref().and_then(|v|v.get(..7)).is_some_and(|end|end<period){continue;}
+        let start=crate::import_inputs::plan_month(&plan.effective_from,false)?;
+        let end=plan.effective_to.as_deref().map(|v|crate::import_inputs::plan_month(v,true)).transpose()?;
+        if start.as_str()<=period&&end.as_deref().is_none_or(|end|end>=period){if selected.is_some(){return Err(format!("{} · {} 在 {period} 有重叠工资方案",employee.name,employee.id));}selected=Some(plan);}
     }
-    if prior_plan&&selected.is_none(){return Err(format!("工号 {} 在 {} 没有生效薪酬方案",employee.id,period));}
-    amount(selected.as_ref().map(|p|p.base_salary.as_str()).unwrap_or(&employee.base_salary),"固定月薪")
+    selected.ok_or_else(||format!("{} · {} 在 {period} 没有有效工资方案，请维护工资方案",employee.name,employee.id))
 }
+pub(crate) fn salary_for(session:&payroll_storage::Session,employee:&Employee,period:&str)->Result<Decimal,String>{amount(&plan_for(session,employee,period)?.base_salary,"固定月薪")}
 #[tauri::command]
 pub fn payroll_calculate_batch(state:State<AppState>,request:BatchRequest)->Result<BatchResult,String>{
     state.with_session_mut(|session|run(session,request))
 }
 fn run(session:&mut payroll_storage::Session,request:BatchRequest)->Result<BatchResult,String>{
+        if !payroll_core::contributions::valid_month(&request.period)||!payroll_core::contributions::valid_month(&request.payout_month){return Err("所属期或发放月格式错误，请使用 YYYY-MM".into());}
         let attendance=index(rows(session,"Attendance")?,"period",&request.period)?;
         if attendance.is_empty(){return Err("当前所属期没有已导入的考勤数据".into());}
         let performance=index(rows(session,"Performance")?,"period",&request.period)?;
         let adjustments=index(rows(session,"Adjustments")?,"period",&request.period)?;
-        let social=index(rows(session,"Social")?,"period",&request.period)?;
+
         let tax=index(rows(session,"TaxHistory")?,"payout_month",&request.payout_month)?;
         let region=if request.region.is_empty(){session.subject.region.clone()}else{request.region.clone()};
         let selected_rules=crate::payroll_rules::selected(&crate::payroll_rules::all(session)?,&format!("{}-01",request.period),&region);
+        let configurations=crate::contribution_config::all(session)?;
         let mut records=Vec::new();let mut ids=Vec::new();let mut warnings=Vec::new();
+        let mut configuration_errors=Vec::new();
+        for employee_id in attendance.keys(){if let Some(employee)=session.get::<Employee>(Collection::Employees,employee_id)?{if let Err(error)=plan_for(session,&employee,&request.period){configuration_errors.push(error);}if let Err(error)=payroll_core::contributions::resolve(&configurations,employee_id,&request.period){configuration_errors.push(format!("{} · {error}",employee.name));}}}
+        if !configuration_errors.is_empty(){return Err(configuration_errors.join("\n"));}
         for (employee_id,att) in attendance{
             let employee:Employee=session.get(Collection::Employees,&employee_id)?.ok_or_else(||format!("考勤第 {} 行工号 {} 不在当前主体员工档案",att.row,employee_id))?;
             let perf=performance.get(&employee_id).ok_or_else(||format!("工号 {employee_id} 缺少绩效输入；请显式导入 0"))?;
             let adj=adjustments.get(&employee_id).ok_or_else(||format!("工号 {employee_id} 缺少补扣款输入；请显式导入 0"))?;
-            let social_row=social.get(&employee_id).ok_or_else(||format!("工号 {employee_id} 缺少社保公积金输入"))?;
+
             let base=salary_for(session,&employee,&request.period)?;
             let standard=number(&att,"standard_days")?;let actual=number(&att,"actual_days")?;
             if standard<=Decimal::ZERO||actual<Decimal::ZERO||actual>standard{return Err(format!("工号 {employee_id} 考勤天数无效"));}
             let performance_amount=number(perf,"performance")?;let adjustment=number(adj,"adjustment")?;
-            let deductions=number(social_row,"employee_contribution")?;let employer=number(social_row,"employer_contribution")?;
+            let contributions=payroll_core::contributions::resolve(&configurations,&employee_id,&request.period)?;
+            let (deductions,employer)=payroll_core::contributions::totals(&contributions)?;
             let fields=BTreeMap::from([("base_salary".into(),base),("standard_days".into(),standard),("actual_days".into(),actual),("performance".into(),performance_amount),("adjustment".into(),adjustment),("employee_contribution".into(),deductions),("employer_contribution".into(),employer)]);
             let performance_input=performance_amount;let adjustment_input=adjustment;let contribution_input=deductions;let employer_input=employer;
             let values=crate::payroll_rules::calculate(&selected_rules,&fields,&format!("{}-01",request.period),&region)?;
@@ -76,7 +81,7 @@ fn run(session:&mut payroll_storage::Session,request:BatchRequest)->Result<Batch
             let result=calculate_pay(gross,deductions,employer,baseline.as_ref().zip(current.as_ref()))?;
             let input=MonthlyRequest{region:region.clone(),employee_id:employee_id.clone(),period:request.period.clone(),payout_month:request.payout_month.clone(),standard_days:standard.to_string(),actual_days:actual.to_string(),performance:performance_input.to_string(),adjustment:adjustment_input.to_string(),employee_deductions:contribution_input.to_string(),employer_contributions:employer_input.to_string(),tax_baseline:baseline,basic_deduction:current.as_ref().map(|v|v.basic_deduction.to_string()),additional_deduction:current.as_ref().map(|v|v.additional_deduction.to_string()),other_deduction:current.as_ref().map(|v|v.other_deduction.to_string()),exempt_income:current.as_ref().map(|v|v.exempt_income.to_string()),tax_relief:current.as_ref().map(|v|v.tax_relief.to_string())};
             let id=Uuid::new_v4().to_string();
-            let snapshot=MonthlySnapshot{calculation_origin:"import_batch".into(),applied_rules:selected_rules.clone(),id:id.clone(),subject_id:session.subject.id.clone(),employee_id,period:request.period.clone(),payout_month:request.payout_month.clone(),fixed_salary:fixed,performance:performance_amount,adjustment,result,input,rule_trace:trace};
+            let snapshot=MonthlySnapshot{needs_recalculation:false,salary_plan:Some(plan_for(session,&employee,&request.period)?),contributions:Some(contributions),contribution_configurations:crate::contribution_config::snapshot_configurations(&configurations,&employee_id,&request.period),calculation_origin:"import_batch".into(),applied_rules:selected_rules.clone(),id:id.clone(),subject_id:session.subject.id.clone(),employee_id,period:request.period.clone(),payout_month:request.payout_month.clone(),fixed_salary:fixed,performance:performance_amount,adjustment,result,input,rule_trace:trace};
             records.push((id.clone(),serde_json::to_string(&snapshot).map_err(|e|e.to_string())?));ids.push(id);
         }
         let run=CalculationRun::new(session,&request.period,&request.payout_month,"batch",ids.clone())?;
@@ -103,12 +108,13 @@ mod tests{
         let store=Store::new(&root).unwrap();
         let subject=store.create_subject("测试甲","1234","上海","test-password").unwrap();
         let mut session=store.unlock(&subject.id,"test-password").unwrap();
-        let sources:[(ImportKind,&str,&[(&str,&str)]);6]=[
+        let sources:[(ImportKind,&str,&[(&str,&str)]);7]=[
             (ImportKind::Employees,"employees.csv",&[("subject_id","主体ID"),("employee_id","工号"),("name","姓名"),("base_salary","固定月薪")]),
             (ImportKind::Attendance,"attendance.csv",&[("subject_id","主体ID"),("employee_id","工号"),("period","所属期"),("standard_days","标准工作日"),("actual_days","实出勤日"),("additional_deduction","专项附加扣除")]),
             (ImportKind::Performance,"performance.csv",&[("subject_id","主体ID"),("employee_id","工号"),("period","所属期"),("performance","绩效奖金")]),
             (ImportKind::Adjustments,"adjustments.csv",&[("subject_id","主体ID"),("employee_id","工号"),("period","所属期"),("adjustment","调整项")]),
-            (ImportKind::Social,"social.csv",&[("subject_id","主体ID"),("employee_id","工号"),("period","所属期"),("employee_contribution","员工承担"),("employer_contribution","单位承担")]),
+            (ImportKind::Social,"contribution-config.csv",&[("employee_id","工号"),("project","缴费项目"),("start","生效月份"),("base","缴费基数"),("employee_percent","员工比例（%）"),("employer_percent","单位比例（%）")]),
+            (ImportKind::SalaryPlans,"salary-plans.csv",&[("employee_id","工号"),("effective_from","生效月份"),("base_salary","固定月薪")]),
             (ImportKind::TaxHistory,"tax_baseline.csv",&[("subject_id","主体ID"),("employee_id","工号"),("payout_month","计划发放月"),("cumulative_income","此前累计收入"),("cumulative_exempt_income","此前累计免税收入"),("cumulative_basic_deduction","此前累计基本减除费用"),("cumulative_special_deduction","此前累计专项扣除"),("cumulative_additional_deduction","此前累计专项附加扣除"),("cumulative_other_deduction","此前累计其他扣除"),("cumulative_tax_relief","此前累计减免税额"),("cumulative_withheld_tax","此前实际已预扣个税")]),
         ];
         for (kind,filename,columns) in sources{
@@ -127,6 +133,7 @@ mod tests{
             let metadata=crate::app_commands::ImportBatch{id:id.clone(),subject_id:subject.id.clone(),filename:filename.into(),sha256:preview.sha256.clone(),sheet:"CSV".into(),kind:format!("{kind:?}"),row_count:rows.len(),withdrawn_at:None};
             session.import_batch(&id,filename,&preview.sha256,source.as_bytes(),&metadata,&rows,&employees).unwrap();
         }
+        session.upsert(Collection::ContributionConfigurations,"default",&payroll_core::contributions::Configuration{id:"default".into(),employee_id:None,project:"养老保险".into(),start:"2026-01".into(),end:None,enabled:true,base:None,employee_percent:Some(8.into()),employer_percent:Some(12.into())}).unwrap();
         let before=crate::work_progress::progress(&session,&crate::work_progress::WorkScope{period:"2026-10".into(),payout_month:"2026-11".into(),region:"上海".into()}).unwrap();assert_eq!(before.steps[0].state,"done");assert_eq!(before.steps[1].state,"done");assert_eq!(before.steps[2].state,"pending");
         let mut expected=BTreeMap::new();
         let mut reader=csv::Reader::from_path(fixture("expected_payroll.csv")).unwrap();
@@ -144,6 +151,11 @@ mod tests{
                 assert_eq!(snapshot.result.net,Some(amount(&target["实发工资"],"expected").unwrap()));
             }
         }
+        let count=session.page::<MonthlySnapshot>(Collection::Calculations,1,100).unwrap().total;
+        let config_batch=session.page::<crate::app_commands::ImportBatch>(Collection::ImportBatches,1,100).unwrap().records.into_iter().find(|b|b.filename=="contribution-config.csv").unwrap();
+        session.set_import_withdrawn(&config_batch.id,true).unwrap();
+        assert!(run(&mut session,BatchRequest{period:"2026-10".into(),payout_month:"2026-11".into(),region:"上海".into(),basic_deduction:"5000".into(),other_deduction:"0".into(),exempt_income:"0".into(),tax_relief:"0".into()}).unwrap_err().contains("缺少"));
+        assert_eq!(session.page::<MonthlySnapshot>(Collection::Calculations,1,100).unwrap().total,count);session.set_import_withdrawn(&config_batch.id,false).unwrap();
         let scope=crate::work_progress::WorkScope{period:"2026-10".into(),payout_month:"2026-11".into(),region:"上海".into()};
         let progress=crate::work_progress::progress(&session,&scope).unwrap();assert_eq!((progress.calculated_count,progress.default_rule_count,progress.custom_rule_count,progress.stale_count),(2,9,0,0));assert!(progress.steps.iter().take(4).all(|step|step.state=="done"));assert_eq!(progress.steps[4].state,"pending");
         let future=crate::work_progress::WorkScope{period:"2027-01".into(),payout_month:"2027-02".into(),region:"上海".into()};assert_eq!(crate::work_progress::progress(&session,&future).unwrap().calculated_count,0);
@@ -160,6 +172,8 @@ mod tests{
         for id in recalculated.version_ids{let value:MonthlySnapshot=session.get(Collection::Calculations,&id).unwrap().unwrap();assert_eq!(value.applied_rules.iter().find(|rule|rule.code=="fixed_salary").unwrap().version,1);assert_eq!(value.result.gross,if value.employee_id=="A-1001"{Decimal::from(21000)}else{Decimal::from(25000)});assert_eq!(value.input.performance,"1000");}
         assert_eq!(crate::work_progress::progress(&session,&scope).unwrap().stale_count,0);assert_eq!(crate::work_progress::progress(&session,&scope).unwrap().exported_count,0);
         for snapshot in old{let original:MonthlySnapshot=session.get(Collection::Calculations,&snapshot.id).unwrap().unwrap();assert_eq!(original.result.gross,snapshot.result.gross);assert!(original.applied_rules.iter().all(|rule|rule.version==0));}
+        let batch_snapshot=session.page::<MonthlySnapshot>(Collection::Calculations,1,100).unwrap().records.into_iter().find(|v|v.period=="2026-10").unwrap();
+        let mut manual=batch_snapshot.input.clone();manual.employee_deductions="999999".into();manual.employer_contributions="999999".into();let single=crate::app_commands::calculate_monthly(&mut session,manual).unwrap();assert_eq!(single.result.gross,batch_snapshot.result.gross);assert_eq!(single.result.employee_deductions,batch_snapshot.result.employee_deductions);assert_eq!(single.contributions,batch_snapshot.contributions);
         drop(session);fs::remove_dir_all(root).unwrap();
     }
 }

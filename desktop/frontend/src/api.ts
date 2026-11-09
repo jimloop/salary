@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import type { CalculationEmployee,EmployeeVersions,EmployeeImportData,WorkProgress,EffectiveRule,DataFilter,ImportedDataRow,UploadStatus,BonusScheme, Subject, Page, Employee, SalaryPlan, Item, Rule, RulePackPreview, MonthlyRequest, MonthlySnapshot, BatchRequest, BatchResult, CalculationRun, ImportKind, ImportPreview, ImportCheck, ImportBatch, InferenceReport, BonusRequest, BonusSnapshot, VersionDiff, AuditEntry } from './types';
 
 export const api = {
+  salaryEffective:(employeeId:string,period:string)=>invoke<import('./types').SalaryPlan>('salary_effective',{employeeId,period}),
+  contributionStatus:(period:string,employeeId='')=>invoke<import('./types').ConfigurationStatus>('contribution_status',{period,employeeId}),
+  deleteContributionConfiguration:(id:string)=>invoke<void>('contribution_configuration_delete',{id}),
+  contributionConfigurations:()=>invoke<import('./types').ContributionConfiguration[]>('contribution_configurations'),
+  saveContributionConfiguration:(configuration:import('./types').ContributionConfiguration)=>invoke<import('./types').ContributionConfiguration>('contribution_configuration_save',{configuration}),
+  contributionPreview:(employeeId:string,period:string)=>invoke<import('./types').Contribution[]>('contribution_preview',{employeeId,period}),
   calculationEmployees:(period:string,payoutMonth:string,query:string,page:number,pageSize:number,focusEmployeeId?:string)=>invoke<Page<CalculationEmployee>>('calculation_employees_page',{period,payoutMonth,query,page,pageSize,focusEmployeeId}),
   employeeCalculationVersions:(employeeId:string,period:string,payoutMonth:string)=>invoke<EmployeeVersions>('calculation_employee_versions',{employeeId,period,payoutMonth}),
   employeeImportData:(filter:DataFilter)=>invoke<EmployeeImportData>('imports_employee_data',{filter}),

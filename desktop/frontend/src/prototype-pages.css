@@ -82,7 +82,7 @@ select:disabled,input:disabled{background-color:#f5f7fb;color:#9aa6b7;cursor:not
 .combo-options>button{display:block;width:100%;text-align:left;border:0;border-radius:6px;padding:8px 9px;font-size:11px;white-space:normal;background:#fff;box-shadow:none}
 .combo-options>button:hover,.combo-options>button.active{background:#eef2ff;transform:none}.combo-options>button[aria-selected=true]{color:var(--blue);font-weight:650}
 .combo-empty{padding:9px;color:#8996a8;font-size:11px}
-.date-field.invalid{border-color:#d74747}.date-field>.date-native-picker{position:absolute!important;right:0;top:0;width:1px!important;height:1px!important;opacity:0;pointer-events:none;padding:0!important;border:0!important}
+.date-field.invalid{border-color:#d74747}
 .pagination .combo-select{width:66px;height:32px}.pagination .combo-trigger{width:25px;height:30px}.pagination .combo-select>input{padding-left:8px!important;padding-right:0!important}
 .embedded-audit .panel-head .danger-text{flex:none;white-space:nowrap;padding:8px 10px;font-size:11px}
 .search-box:focus-within{border-color:#8fa4ed;box-shadow:0 0 0 3px #a6b6ff66;background:#fff}
@@ -116,3 +116,9 @@ select:disabled,input:disabled{background-color:#f5f7fb;color:#9aa6b7;cursor:not
 .history-page .pagination-pages button:disabled{color:#9aa6b7;background:#f5f7fb;border-color:var(--line)}
 .history-page .combo-trigger,.history-page .date-picker-button{color:#4b63ed}
 @media(max-width:560px){.history-page .prototype-form-row>label{width:100%;flex-basis:100%}.history-page .prototype-form-row>.query-button{width:100%}}
+
+.date-calendar{position:fixed;z-index:60;width:280px;padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--ink);box-shadow:0 12px 32px #23395833;font-size:12px;max-height:calc(100vh - 16px);overflow:auto}
+.calendar-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.calendar-heading button{padding:4px 10px;min-width:30px;height:30px}
+.calendar-months{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.calendar-choice{padding:6px;min-height:30px;border:1px solid transparent;border-radius:6px}.calendar-choice[aria-pressed=true]{background:#4b63ed;color:#fff;border-color:#4b63ed}
+.calendar-days{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}.calendar-days>span{padding:5px 0;color:#718099}.calendar-days button{font-size:12px;min-width:0;padding:3px}
+.calendar-actions{display:flex;justify-content:space-between;border-top:1px solid var(--line);margin-top:10px;padding-top:8px}.calendar-actions button{padding:4px 9px;font-size:12px}

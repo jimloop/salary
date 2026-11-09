@@ -47,11 +47,15 @@ pub struct MonthlyRequest {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MonthlySnapshot {
+    #[serde(default)] pub needs_recalculation:bool,
     #[serde(default)] pub calculation_origin:String,
     #[serde(default)] pub applied_rules:Vec<Rule>,
     pub id: String, pub subject_id: String, pub employee_id: String, pub period: String, pub payout_month: String,
     pub fixed_salary: Decimal, pub performance: Decimal, pub adjustment: Decimal,
     pub result: PayResult, pub input: MonthlyRequest,
+    #[serde(default)] pub contributions:Option<Vec<payroll_core::contributions::Contribution>>,
+    #[serde(default)] pub contribution_configurations:Vec<payroll_core::contributions::Configuration>,
+    #[serde(default)] pub salary_plan:Option<SalaryPlan>,
     #[serde(default)] pub rule_trace:Vec<payroll_core::rules::RuleTrace>,
 }
 #[derive(Clone, Serialize)]
@@ -84,7 +88,9 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
             validation.errors.push(RowError{sheet:row.sheet.clone(),row:row.row,field:"employee_id".into(),reason:"工号在当前主体不存在，请先导入员工基础表".into()});
         }
     }
+    for row in &validation.rows { if let (Some(id),Some(name))=(row.fields.get("employee_id"),row.fields.get("name")){if !name.is_empty(){if let Some(employee)=session.get::<Employee>(Collection::Employees,id)?{if &employee.name!=name{validation.errors.push(RowError{sheet:row.sheet.clone(),row:row.row,field:"name".into(),reason:"姓名与当前主体员工档案不一致，请核对工号".into()});}}}} }
     crate::import_inputs::validate_plans(session,kind,validation)?;
+    if kind==ImportKind::Social { crate::contribution_config::validate_import(session,validation)?; }
     Ok(())
 }
 
@@ -94,6 +100,7 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
     let mut guard=state.current.lock().map_err(|_| "工作空间状态异常")?;
     *guard=None;
     let mut session=state.store.unlock(&id,&password)?;
+    crate::import_inputs::migrate_legacy_salaries(&mut session)?;
     session.log_action("unlock","workspace")?;
     state.store.mark_opened(&id)?;
     *guard=Some(session);
@@ -138,18 +145,18 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
         Ok(Page{records:records.into_iter().skip(start).take(page_size as usize).collect(),total,page,page_size})
     })
 }
-#[tauri::command] pub fn salary_plans_save(state:State<AppState>,mut plan:SalaryPlan)->Result<SalaryPlan,String>{
-    state.with_session_mut(|session|{
-        if plan.id.starts_with("import:"){return Err("导入的薪酬方案请通过撤销原批次后重新导入修订".into());}
-        if plan.employee_id.trim().is_empty()||plan.effective_from.len()!=10{return Err("工号和方案生效日期必填".into());}
-        if plan.effective_to.as_deref().is_some_and(|end|end<plan.effective_from.as_str()){return Err("方案结束日期早于生效日期".into());}
-        if amount(&plan.base_salary,"固定月薪")?.is_sign_negative(){return Err("固定月薪不能为负".into());}
-        let _:Employee=session.get(Collection::Employees,&plan.employee_id)?.ok_or("员工不存在")?;
-        for old in crate::import_inputs::plans(session)?{if old.id!=plan.id&&crate::import_inputs::overlap(&old,&plan){return Err(format!("与 {} 起的已有薪酬方案期间冲突",old.effective_from));}}
-        if plan.id.is_empty(){plan.id=Uuid::new_v4().to_string();}
-        session.upsert(Collection::SalaryPlans,&plan.id,&plan)?;
-        Ok(plan)
-    })
+#[tauri::command] pub fn salary_plans_save(state:State<AppState>,plan:SalaryPlan)->Result<SalaryPlan,String>{state.with_session_mut(|session|save_salary_plan(session,plan))}
+pub(crate) fn save_salary_plan(session:&mut Session,mut plan:SalaryPlan)->Result<SalaryPlan,String>{
+ let mut records=crate::import_inputs::plans(session)?;
+ if !plan.id.is_empty(){let old=records.iter().find(|p|p.id==plan.id).ok_or("工资方案已失效，请刷新后重试")?;if old.employee_id!=plan.employee_id{return Err("不能更改工资方案所属员工".into());}}
+ let _:Employee=session.get(Collection::Employees,&plan.employee_id)?.ok_or("员工不存在")?;
+ plan.effective_from=crate::import_inputs::plan_month(&plan.effective_from,false)?;
+ plan.effective_to=plan.effective_to.as_deref().map(|v|crate::import_inputs::plan_month(v,true)).transpose()?;
+ if amount(&plan.base_salary,"固定月薪")?.is_sign_negative(){return Err("固定月薪不能为负".into());}
+ if plan.id.is_empty(){plan.id=Uuid::new_v4().to_string();}
+ records.retain(|p|p.id!=plan.id);records.push(plan.clone());
+ crate::import_inputs::validate_timeline(&records.into_iter().filter(|p|p.employee_id==plan.employee_id).collect::<Vec<_>>())?;
+ session.upsert(Collection::SalaryPlans,&plan.id,&plan)?;Ok(plan)
 }
 #[tauri::command] pub fn items_page(state:State<AppState>,page:u32,page_size:u32,category:Option<String>,period:Option<String>,region:Option<String>)->Result<Page<crate::item_catalog::ItemView>,String>{state.with_session(|session|{
  if page==0||![20,50,100].contains(&page_size){return Err("分页参数无效".into());}let category=category.unwrap_or_default();let period=period.unwrap_or_else(||"2026-10".into());let region=region.unwrap_or_else(||session.subject.region.clone());let rows:Vec<_>=crate::item_catalog::catalog(session,&period,&region)?.into_iter().filter(|value|category.is_empty()||value.item.category==category).collect();let total=rows.len() as u64;let current=page.min(((total+u64::from(page_size)-1)/u64::from(page_size)).max(1) as u32);Ok(Page{records:rows.into_iter().skip(((current-1)*page_size) as usize).take(page_size as usize).collect(),total,page:current,page_size})
@@ -178,9 +185,9 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
     })
 }
 
-#[tauri::command] pub fn payroll_calculate(state: State<AppState>,request:MonthlyRequest) -> Result<MonthlySnapshot,String> {
-    state.with_session_mut(|session| {
-        if request.period.len()!=7||request.payout_month.len()!=7||request.period.as_bytes().get(4)!=Some(&b'-')||request.payout_month.as_bytes().get(4)!=Some(&b'-') {return Err("所属期或发放月格式错误".into());}
+#[tauri::command] pub fn payroll_calculate(state: State<AppState>,request:MonthlyRequest) -> Result<MonthlySnapshot,String> { state.with_session_mut(|session|calculate_monthly(session,request)) }
+pub(crate) fn calculate_monthly(session:&mut Session,mut request:MonthlyRequest)->Result<MonthlySnapshot,String>{
+        if !payroll_core::contributions::valid_month(&request.period)||!payroll_core::contributions::valid_month(&request.payout_month){return Err("所属期或发放月格式错误，请使用 YYYY-MM".into());}
         let employee:Employee=session.get(Collection::Employees,&request.employee_id)?.ok_or("当前主体没有该员工")?;
         let base=crate::batch::salary_for(session,&employee,&request.period)?;
         let standard=amount(&request.standard_days,"标准工作日")?;
@@ -188,8 +195,10 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
         if standard<=Decimal::ZERO||actual<Decimal::ZERO||actual>standard {return Err("工作日数量无效".into());}
         let performance=amount(&request.performance,"绩效奖金")?;
         let adjustment=amount(&request.adjustment,"调整项")?;
-        let employee_deductions=amount(&request.employee_deductions,"员工承担")?;
-        let employer_contributions=amount(&request.employer_contributions,"单位承担")?;
+        let configurations=crate::contribution_config::all(session)?;
+        let contributions=payroll_core::contributions::resolve(&configurations,&employee.id,&request.period)?;
+        let (employee_deductions,employer_contributions)=payroll_core::contributions::totals(&contributions)?;
+        request.employee_deductions=employee_deductions.to_string();request.employer_contributions=employer_contributions.to_string();
         let region=if request.region.is_empty(){session.subject.region.clone()}else{request.region.clone()};let date=format!("{}-01",request.period);
         let rules=crate::payroll_rules::selected(&crate::payroll_rules::all(session)?,&date,&region);
         let fields=BTreeMap::from([("base_salary".into(),base),("standard_days".into(),standard),("actual_days".into(),actual),("performance".into(),performance),("adjustment".into(),adjustment),("employee_contribution".into(),employee_deductions),("employer_contribution".into(),employer_contributions)]);
@@ -204,15 +213,14 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
         }else{None};
         let tax=request.tax_baseline.as_ref().zip(current.as_ref());
         let result=calculate_pay(gross,employee_deductions,employer_contributions,tax)?;
-        let snapshot=MonthlySnapshot{calculation_origin:"manual".into(),applied_rules:rules.clone(),id:Uuid::new_v4().to_string(),subject_id:session.subject.id.clone(),employee_id:request.employee_id.clone(),period:request.period.clone(),payout_month:request.payout_month.clone(),fixed_salary:fixed,performance,adjustment,result,input:request,rule_trace:values.trace};
+        let snapshot=MonthlySnapshot{needs_recalculation:false,salary_plan:Some(crate::batch::plan_for(session,&employee,&request.period)?),contributions:Some(contributions),contribution_configurations:crate::contribution_config::snapshot_configurations(&configurations,&employee.id,&request.period),calculation_origin:"manual".into(),applied_rules:rules.clone(),id:Uuid::new_v4().to_string(),subject_id:session.subject.id.clone(),employee_id:request.employee_id.clone(),period:request.period.clone(),payout_month:request.payout_month.clone(),fixed_salary:fixed,performance,adjustment,result,input:request,rule_trace:values.trace};
         let run=crate::export_runs::CalculationRun::new(session,&snapshot.period,&snapshot.payout_month,"single",vec![snapshot.id.clone()])?;
         let record=serde_json::to_string(&snapshot).map_err(|e|e.to_string())?;
         let audit_target=serde_json::json!({"run_version":run.version,"employee_count":1}).to_string();
         session.insert_calculation_run(&run.id,&run,&[(snapshot.id.clone(),record)],"insert",&audit_target)?;
         Ok(snapshot)
-    })
 }
-#[tauri::command] pub fn payroll_versions(state: State<AppState>,page:u32,page_size:u32) -> Result<Page<MonthlySnapshot>,String> { state.with_session(|s|s.page(Collection::Calculations,page,page_size)) }
+#[tauri::command] pub fn payroll_versions(state: State<AppState>,page:u32,page_size:u32) -> Result<Page<MonthlySnapshot>,String> { state.with_session(|s|{let mut rows=s.page::<MonthlySnapshot>(Collection::Calculations,page,page_size)?;crate::work_progress::mark_recalculation(s,&mut rows.records)?;Ok(rows)}) }
 
 #[tauri::command] pub fn imports_preview(state: State<AppState>,path:String) -> Result<ImportPreview,String> {
     state.with_session(|_| {
@@ -249,7 +257,19 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
     })
 }
 #[tauri::command] pub fn imports_page(state: State<AppState>,page:u32,page_size:u32) -> Result<Page<ImportBatch>,String> {state.with_session(|s|s.page(Collection::ImportBatches,page,page_size))}
-#[tauri::command] pub fn imports_set_withdrawn(state:State<AppState>,batch_id:String,withdrawn:bool)->Result<(),String>{state.with_session_mut(|s|s.set_import_withdrawn(&batch_id,withdrawn))}
+#[tauri::command] pub fn imports_set_withdrawn(state:State<AppState>,batch_id:String,withdrawn:bool)->Result<(),String>{state.with_session_mut(|session|set_import_status(session,&batch_id,withdrawn))}
+pub(crate) fn set_import_status(session:&mut Session,batch_id:&str,withdrawn:bool)->Result<(),String>{
+    if !withdrawn {
+        let batch:ImportBatch=session.get(Collection::ImportBatches,&batch_id)?.ok_or("批次不存在")?;
+        let rows=session.imported_data(true)?.into_iter().filter(|v|v["batch_id"].as_str()==Some(batch_id)).map(|v|serde_json::from_value(v["data"].clone()).map_err(|e|e.to_string())).collect::<Result<Vec<payroll_import::ValidatedRow>,String>>()?;
+        let validation=Validation{rows,errors:Vec::new()};
+        if batch.kind=="SalaryPlans" {let mut plans=crate::import_inputs::plans(session)?;for row in &validation.rows{let id=format!("import:{batch_id}:{}",row.row);plans.push(session.get::<SalaryPlan>(Collection::SalaryPlans,&id)?.unwrap_or(crate::import_inputs::row_plan(row)?));}crate::import_inputs::validate_timeline(&plans)?;}
+        if batch.kind=="Social" {let mut configs=crate::contribution_config::all(session)?;for row in &validation.rows{if row.fields.contains_key("project"){let record=crate::contribution_config::row_configuration(row,batch_id)?;if session.get::<serde_json::Value>(Collection::ContributionDeletions,&record.id)?.is_some(){continue;}configs.push(session.get(Collection::ContributionConfigurations,&record.id)?.unwrap_or(record));}}payroll_core::contributions::validate(&configs)?;}
+        if !validation.errors.is_empty(){return Err(validation.errors.iter().map(|e|e.reason.clone()).collect::<Vec<_>>().join("；"));}
+    }
+    session.set_import_withdrawn(batch_id,withdrawn)
+}
+
 
 #[tauri::command] pub fn inference_analyze(state: State<AppState>,path:String,sheet:String,observed_header:String,mapping:BTreeMap<String,String>) -> Result<InferenceReport,String> {
     state.with_session(|_|{
@@ -309,6 +329,8 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
         let right_input=serde_json::to_value(&right.input).map_err(|e|e.to_string())?;
         let mut changed_inputs=Vec::new();
         if let (Some(a),Some(b))=(left_input.as_object(),right_input.as_object()) {for (key,value) in a{if b.get(key)!=Some(value){changed_inputs.push(key.clone());}}}
+        if left.contributions!=right.contributions{changed_inputs.push("社保公积金基数或比例配置".into());}
+        if serde_json::to_value(&left.salary_plan).ok()!=serde_json::to_value(&right.salary_plan).ok(){changed_inputs.push("工资方案".into());}
         Ok(VersionDiff{left_id,right_id,employee_id:left.employee_id,gross_delta:right.result.gross-left.result.gross,net_delta:left.result.net.zip(right.result.net).map(|(a,b)|b-a),changed_inputs})
     })
 }
@@ -321,9 +343,9 @@ fn validate_employee_refs(session:&Session,kind:ImportKind,validation:&mut Valid
         let mut bytes=vec![0xef,0xbb,0xbf];
         let mut writer=csv::Writer::from_writer(Vec::new());
         let names=crate::export_runs::employee_names(session,&snapshots)?;
-        writer.write_record(["工号","姓名","固定薪","绩效","调整项","应发工资","员工承担","本期预扣个税","实发工资","单位成本"]).map_err(|e|e.to_string())?;
+        writer.write_record(["工号","姓名","固定薪","绩效","调整项","应发工资","员工承担","本期预扣个税","实发工资","单位成本","缴费项目基数比例及承担明细"]).map_err(|e|e.to_string())?;
         for snapshot in &snapshots{
-            writer.write_record([snapshot.employee_id.as_str(),names.get(&snapshot.employee_id).map(String::as_str).unwrap_or(""),&snapshot.fixed_salary.to_string(),&snapshot.performance.to_string(),&snapshot.adjustment.to_string(),&snapshot.result.gross.to_string(),&snapshot.result.employee_deductions.to_string(),&snapshot.result.withholding.as_ref().map(|v|v.current_withholding.to_string()).unwrap_or_else(||"不可准确测算".into()),&snapshot.result.net.map(|v|v.to_string()).unwrap_or_else(||"不可准确测算".into()),&snapshot.result.employer_cost.to_string()]).map_err(|e|e.to_string())?;
+            writer.write_record([snapshot.employee_id.as_str(),names.get(&snapshot.employee_id).map(String::as_str).unwrap_or(""),&snapshot.fixed_salary.to_string(),&snapshot.performance.to_string(),&snapshot.adjustment.to_string(),&snapshot.result.gross.to_string(),&snapshot.result.employee_deductions.to_string(),&snapshot.result.withholding.as_ref().map(|v|v.current_withholding.to_string()).unwrap_or_else(||"不可准确测算".into()),&snapshot.result.net.map(|v|v.to_string()).unwrap_or_else(||"不可准确测算".into()),&snapshot.result.employer_cost.to_string(),&crate::contribution_config::summary(snapshot)]).map_err(|e|e.to_string())?;
         }
         bytes.extend(writer.into_inner().map_err(|e|e.to_string())?);
         fs::write(path,bytes).map_err(|e|e.to_string())?;

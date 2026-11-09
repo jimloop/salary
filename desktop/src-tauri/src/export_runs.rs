@@ -18,6 +18,7 @@ pub fn employee_names(session:&Session,versions:&[MonthlySnapshot])->Result<BTre
 
 #[derive(Clone,Serialize,Deserialize)]
 pub struct CalculationRun {
+    #[serde(default)] pub needs_recalculation:bool,
     pub id:String,
     pub subject_id:String,
     pub period:String,
@@ -31,7 +32,7 @@ pub struct CalculationRun {
 impl CalculationRun {
     pub fn new(session:&Session,period:&str,payout_month:&str,kind:&str,version_ids:Vec<String>)->Result<Self,String>{
         if version_ids.is_empty(){return Err("本次试算没有员工结果".into());}
-        Ok(Self{
+        Ok(Self{needs_recalculation:false,
             id:Uuid::new_v4().to_string(),subject_id:session.subject.id.clone(),period:period.into(),payout_month:payout_month.into(),
             version:session.next_calculation_version(period,payout_month)?,kind:kind.into(),
             created_at:SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e|e.to_string())?.as_secs(),version_ids,
@@ -48,6 +49,7 @@ pub fn export_runs(state:State<AppState>,period:String,payout_month:String)->Res
             found.extend(batch.records.into_iter().filter(|run|run.subject_id==session.subject.id&&run.period==period&&run.payout_month==payout_month));
             if page as u64*100>=batch.total{break;}page+=1;
         }
+        for run in &mut found {let mut snapshots=selected_snapshots(session,&run.id)?.1;crate::work_progress::mark_recalculation(session,&mut snapshots)?;run.needs_recalculation=snapshots.iter().any(|v|v.needs_recalculation);}
         Ok(found)
     })
 }

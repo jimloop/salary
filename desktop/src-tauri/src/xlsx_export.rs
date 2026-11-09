@@ -81,6 +81,10 @@ fn sheets(names:&BTreeMap<String,String>,versions:&[MonthlySnapshot])->Vec<(Stri
         if v.result.net.is_none(){issues.push(vec![v.employee_id.as_str().into(),name.into(),"阻断".into(),"税务基线或本期扣除缺失，个税与实发不可准确测算".into()]);}
         if v.result.net.is_some_and(|value|value<Decimal::ZERO){issues.push(vec![v.employee_id.as_str().into(),name.into(),"警告".into(),"实发工资为负，请复核补扣款".into()]);}
         explanation.push(vec![v.employee_id.as_str().into(),name.into(),"固定薪".into(),"固定月薪 ÷ 标准工作日 × 实出勤日；两位小数".into(),format!("标准 {} 日，实际 {} 日",v.input.standard_days,v.input.actual_days).into(),v.fixed_salary.into()]);
+        match &v.contributions {
+            Some(rows)=>for row in rows { for (label,percent,amount) in [("员工",&row.employee_percent,row.employee_amount),("单位",&row.employer_percent,row.employer_amount)] {explanation.push(vec![v.employee_id.as_str().into(),name.into(),format!("{} · {label}承担",row.project).into(),format!("{} × {}%（逐项目到分）",row.base.value,percent.value).into(),format!("基数：{}；比例：{}",if row.base.scope=="employee"{"员工覆盖"}else{"主体默认"},if percent.scope=="employee"{"员工覆盖"}else{"主体默认"}).into(),amount.into()]);}},
+            None=>explanation.push(vec![v.employee_id.as_str().into(),name.into(),"社保公积金".into(),"旧版金额结果，无基数比例快照".into(),"历史快照".into(),v.result.employee_deductions.into()]),
+        }
         for trace in &v.rule_trace{explanation.push(vec![v.employee_id.as_str().into(),name.into(),trace.code.as_str().into(),trace.expression.as_str().into(),format!("{:?}",trace.inputs).into(),trace.result.into()]);}
         explanation.push(vec![v.employee_id.as_str().into(),name.into(),"累计预扣个税".into(),"累计应纳税所得额 × 预扣率 − 速算扣除数 − 此前实际已预扣税".into(),v.input.tax_baseline.as_ref().map(|b|format!("历史实际已预扣 {}",b.cumulative_withheld_tax)).unwrap_or_else(||"缺历史基线".into()).into(),tax.into()]);
     }

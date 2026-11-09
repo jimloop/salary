@@ -1,6 +1,6 @@
 [package]
 name = "salary-assistant-desktop"
-version = "0.3.12"
+version = "0.3.20"
 description = "Salary Assistant desktop app"
 authors = ["SalaryAssistant"]
 edition = "2021"

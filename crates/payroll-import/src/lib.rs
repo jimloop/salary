@@ -19,7 +19,7 @@ impl ImportKind {
             Self::Performance => &["employee_id","period","performance"],
             Self::Adjustments => &["employee_id","period","adjustment"],
             Self::TaxHistory => &["employee_id","payout_month","cumulative_income","cumulative_withheld_tax"],
-            Self::Social => &["employee_id","period","employee_contribution","employer_contribution"],
+            Self::Social => &["employee_id","project","start"],
             Self::HistoricalPayroll => &["employee_id","period","gross","net"],
         }
     }
@@ -91,6 +91,7 @@ pub fn read_file(path:&Path)->Result<FilePreview,String> {
 }
 
 pub fn validate(preview:&FilePreview,kind:ImportKind,subject_id:&str,sheet_name:&str,mapping:&BTreeMap<String,String>)->Result<Validation,String>{
+    if kind==ImportKind::Social && (mapping.contains_key("employee_contribution") || mapping.contains_key("employer_contribution")) { return Err("旧金额表不能用于新计算，请下载员工社保公积金配置模板".into()); }
     let sheet=preview.sheets.iter().find(|s|s.name==sheet_name).ok_or("工作表不存在")?;
     for field in kind.required(){if mapping.get(*field).is_none_or(|value|value.is_empty()){return Err(format!("缺少必填字段映射：{field}"));}}
     for source in mapping.values().filter(|v|!v.is_empty()){if !sheet.headers.contains(source){return Err(format!("原始列不存在：{source}"));}}
@@ -104,13 +105,13 @@ pub fn validate(preview:&FilePreview,kind:ImportKind,subject_id:&str,sheet_name:
         }).collect();
         fields.insert("subject_id".into(),subject_id.into());
         for field in kind.required(){if fields.get(*field).is_none_or(|v|v.is_empty()){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:(*field).into(),reason:"必填字段为空，请在源文件补全".into()});}}
-        let numeric:&[&str]=match kind { ImportKind::SalaryPlans=>&["base_salary"],ImportKind::Bonus=>&["target","performance_factor","eligible_days","plan_days","minimum","maximum"],ImportKind::Employees=>&["base_salary"],ImportKind::Attendance=>&["standard_days","actual_days","additional_deduction"],ImportKind::Performance=>&["performance"],ImportKind::Adjustments=>&["adjustment"],ImportKind::TaxHistory=>&["cumulative_income","cumulative_exempt_income","cumulative_basic_deduction","cumulative_special_deduction","cumulative_additional_deduction","cumulative_other_deduction","cumulative_tax_relief","cumulative_withheld_tax"],ImportKind::Social=>&["employee_contribution","employer_contribution"],ImportKind::HistoricalPayroll=>&["gross","net"] };
+        let numeric:&[&str]=match kind { ImportKind::SalaryPlans=>&["base_salary"],ImportKind::Bonus=>&["target","performance_factor","eligible_days","plan_days","minimum","maximum"],ImportKind::Employees=>&["base_salary"],ImportKind::Attendance=>&["standard_days","actual_days","additional_deduction"],ImportKind::Performance=>&["performance"],ImportKind::Adjustments=>&["adjustment"],ImportKind::TaxHistory=>&["cumulative_income","cumulative_exempt_income","cumulative_basic_deduction","cumulative_special_deduction","cumulative_additional_deduction","cumulative_other_deduction","cumulative_tax_relief","cumulative_withheld_tax"],ImportKind::Social=>&["base","employee_percent","employer_percent"],ImportKind::HistoricalPayroll=>&["gross","net"] };
         for field in numeric{if let Some(value)=fields.get(*field){if !value.is_empty()&&Decimal::from_str(&value.replace(',',"")).is_err(){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:(*field).into(),reason:"金额或数量格式无效，请填写数字".into()});}}}
-        for field in ["period","payout_month"]{
+        for field in ["period","payout_month","start","end"]{
             if let Some(value)=fields.get(field){if !value.is_empty()&&!valid_month(value){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:field.into(),reason:"月份格式无效，请使用 YYYY-MM".into()});}}
         }
         for field in ["hire_date","effective_from","effective_to"]{
-            if let Some(value)=fields.get(field){if !value.is_empty()&&!valid_date(value){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:field.into(),reason:"日期无效，请使用 YYYY-MM-DD".into()});}}
+            if let Some(value)=fields.get(field){if !value.is_empty()&&!(valid_date(value)||kind==ImportKind::SalaryPlans&&valid_month(value)){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:field.into(),reason:"日期无效，请使用 YYYY-MM-DD".into()});}}
         }
         for field in ["base_salary","standard_days","actual_days","additional_deduction","employee_contribution","employer_contribution","cumulative_income","cumulative_withheld_tax"]{
             if let Some(value)=fields.get(field){if let Ok(number)=Decimal::from_str(&value.replace(',',"")){if number.is_sign_negative()||field=="standard_days"&&number.is_zero(){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:field.into(),reason:"该值必须为非负数，标准工作日须大于零".into()});}}}
@@ -128,8 +129,15 @@ pub fn validate(preview:&FilePreview,kind:ImportKind,subject_id:&str,sheet_name:
             if let (Some(min),Some(max))=(fields.get("minimum").and_then(|v|v.parse::<Decimal>().ok()),fields.get("maximum").and_then(|v|v.parse::<Decimal>().ok())){if min>max{errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:"maximum".into(),reason:"封顶金额不能低于保底金额".into()});}}
             for field in ["target","performance_factor","minimum","maximum"]{if fields.get(field).and_then(|v|v.parse::<Decimal>().ok()).is_some_and(|v|v.is_sign_negative()){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:field.into(),reason:"金额和系数不能为负".into()});}}
         }
+        if kind==ImportKind::Social {
+            if ["base","employee_percent","employer_percent"].iter().all(|key|fields.get(*key).is_none_or(|v|v.is_empty())) { errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:"base".into(),reason:"至少填写基数或一方比例".into()}); }
+            for key in ["base","employee_percent","employer_percent"] { if fields.get(key).and_then(|v|v.parse::<Decimal>().ok()).is_some_and(|n|if key=="base" {n<=Decimal::ZERO}else{n<Decimal::ZERO||n>Decimal::from(100)}) { errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:key.into(),reason:"基数须为正数，比例须在 0%–100% 之间".into()}); } }
+            if fields.get("end").is_some_and(|end|!end.is_empty()&&fields.get("start").is_some_and(|start|end<start)){errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:"end".into(),reason:"截止月份早于生效月份".into()});}
+        }
         let key=format!("{}:{}",fields.get("employee_id").unwrap_or(&String::new()),fields.get("period").or_else(||fields.get("payout_month")).or_else(||fields.get("effective_from")).or_else(||fields.get("bonus_year")).unwrap_or(&String::new()));
+        let key=if kind==ImportKind::Social{format!("{key}:{}:{}",fields.get("project").cloned().unwrap_or_default(),fields.get("start").cloned().unwrap_or_default())}else{key};
         if !seen.insert(key) {errors.push(RowError{sheet:sheet_name.into(),row:row_no,field:"employee_id".into(),reason:"文件中工号与期间重复".into()});}
+        for field in numeric {if let Some(value)=fields.get_mut(*field){*value=value.replace(',',"");}}
         rows.push(ValidatedRow{sheet:sheet_name.into(),row:row_no,fields});
     }
     Ok(Validation{rows,errors})
@@ -185,4 +193,17 @@ mod tests {
         assert_eq!(file.sheets[0].rows.len(),100_000);
         fs::remove_file(path).unwrap();
     }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+ use super::*;
+ #[test]
+ fn contribution_rows_allow_partial_and_zero_but_reject_old_amounts_and_invalid_values(){
+  let headers:Vec<String>=["employee_id","project","start","end","base","employee_percent","employer_percent"].iter().map(|v|v.to_string()).collect();let mapping=headers.iter().map(|key|(key.clone(),key.clone())).collect();
+  let mut preview=FilePreview{filename:"config.csv".into(),sha256:"fake".into(),sheets:vec![Sheet{name:"CSV".into(),headers,rows:vec![vec!["E1".into(),"住房公积金".into(),"2026-01".into(),"".into(),"".into(),"0".into(),"".into()],vec!["E1".into(),"养老保险".into(),"2026-01".into(),"".into(),"10000".into(),"".into(),"".into()]],formulas:vec![]}]};
+  let valid=validate(&preview,ImportKind::Social,"subject","CSV",&mapping).unwrap();assert!(valid.errors.is_empty());assert_eq!(valid.rows[0].fields["employee_percent"],"0");assert_eq!(valid.rows[0].fields["base"],"");assert_eq!(valid.rows[0].fields["subject_id"],"subject");
+  preview.sheets[0].rows[0][5]="101".into();preview.sheets[0].rows[1][4]="0".into();assert_eq!(validate(&preview,ImportKind::Social,"subject","CSV",&mapping).unwrap().errors.len(),2);
+  let old_mapping=BTreeMap::from([("employee_contribution".into(),"员工承担".into())]);assert!(validate(&preview,ImportKind::Social,"subject","CSV",&old_mapping).unwrap_err().contains("旧金额表"));
+ }
 }

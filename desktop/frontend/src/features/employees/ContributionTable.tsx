@@ -1,0 +1,4 @@
+import type { Contribution } from '../../types';
+export function ContributionTable({items,onEdit}:{items:Contribution[];onEdit?:(project:string)=>void}) {
+ return <div className="table-wrap"><table><thead><tr><th>缴费项目</th><th>基数</th><th>员工比例</th><th>单位比例</th><th>员工金额</th><th>单位金额</th>{onEdit&&<th>操作</th>}</tr></thead><tbody>{items.map(item=><tr key={item.project}><td>{item.project}</td>{(['base','employee_percent','employer_percent'] as const).map(key=><td key={key}>{item[key].value}{key==='base'?'':'%'}<small className="formula-source">{item[key].source_id.startsWith('import:')?'员工导入覆盖':item[key].scope==='employee'?'员工单独设置':'跟随主体默认'}</small></td>)}<td>¥{item.employee_amount}</td><td>¥{item.employer_amount}</td>{onEdit&&<td><button className="primary" onClick={()=>onEdit(item.project)}>编辑</button></td>}</tr>)}</tbody></table>{!items.length&&<p className="prototype-helper">当期缴费项目均已停用。</p>}</div>;
+}

@@ -8,9 +8,9 @@ use uuid::Uuid;
 pub struct SubjectInfo { pub id: String, pub name: String, pub tax_suffix: String, #[serde(default)] pub region:String, #[serde(default)] pub last_opened_at:Option<u64> }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Collection { Employees, SalaryPlans, Items, Rules, ImportBatches, HistoricalPayroll, Calculations, CalculationRuns, Bonuses, BonusSchemes, Issues, Audit }
+pub enum Collection { ContributionDeletions, ContributionConfigurations, Employees, SalaryPlans, Items, Rules, ImportBatches, HistoricalPayroll, Calculations, CalculationRuns, Bonuses, BonusSchemes, Issues, Audit }
 impl Collection {
-    fn table(self) -> &'static str { match self { Self::Employees => "employees", Self::SalaryPlans => "salary_plans", Self::Items => "items", Self::Rules => "rules", Self::ImportBatches => "import_batches", Self::HistoricalPayroll => "historical_payroll", Self::Calculations => "calculations", Self::CalculationRuns => "calculation_runs", Self::Bonuses => "bonuses", Self::BonusSchemes=>"bonus_schemes", Self::Issues => "issues", Self::Audit => "audit" } }
+    fn table(self) -> &'static str { match self { Self::ContributionDeletions => "contribution_deletions", Self::ContributionConfigurations => "contribution_configurations", Self::Employees => "employees", Self::SalaryPlans => "salary_plans", Self::Items => "items", Self::Rules => "rules", Self::ImportBatches => "import_batches", Self::HistoricalPayroll => "historical_payroll", Self::Calculations => "calculations", Self::CalculationRuns => "calculation_runs", Self::Bonuses => "bonuses", Self::BonusSchemes=>"bonus_schemes", Self::Issues => "issues", Self::Audit => "audit" } }
 }
 
 #[derive(Debug, Serialize)]
@@ -72,7 +72,7 @@ impl Store {
         let subject = self.list_subjects()?.into_iter().find(|s| s.id == id).ok_or("主体不存在")?;
         let session = self.open_connection(subject, password)?;
         session.connection.query_row("SELECT value FROM app_meta WHERE key='schema_version'", [], |r| r.get::<_, String>(0)).map_err(|_| "主体数据库缺少版本信息".to_string())?;
-        session.connection.execute_batch("CREATE TABLE IF NOT EXISTS bonus_schemes (id TEXT PRIMARY KEY,json TEXT NOT NULL);CREATE TABLE IF NOT EXISTS calculation_runs (id TEXT PRIMARY KEY,json TEXT NOT NULL);").map_err(|e|e.to_string())?;
+        session.connection.execute_batch("CREATE TABLE IF NOT EXISTS contribution_deletions (id TEXT PRIMARY KEY,json TEXT NOT NULL);CREATE TABLE IF NOT EXISTS contribution_configurations (id TEXT PRIMARY KEY,json TEXT NOT NULL);CREATE TABLE IF NOT EXISTS bonus_schemes (id TEXT PRIMARY KEY,json TEXT NOT NULL);CREATE TABLE IF NOT EXISTS calculation_runs (id TEXT PRIMARY KEY,json TEXT NOT NULL);").map_err(|e|e.to_string())?;
         Ok(session)
     }
     pub fn mark_opened(&self,id:&str)->Result<(),String>{
@@ -125,6 +125,8 @@ impl Session {
         self.connection.execute_batch("BEGIN IMMEDIATE;
             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             INSERT INTO app_meta VALUES ('schema_version', '1');
+            CREATE TABLE contribution_deletions (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+            CREATE TABLE contribution_configurations (id TEXT PRIMARY KEY, json TEXT NOT NULL);
             CREATE TABLE employees (id TEXT PRIMARY KEY, json TEXT NOT NULL);
             CREATE TABLE salary_plans (id TEXT PRIMARY KEY, json TEXT NOT NULL);
             CREATE TABLE items (id TEXT PRIMARY KEY, json TEXT NOT NULL);
@@ -141,6 +143,16 @@ impl Session {
             CREATE TABLE import_rows (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, row_no INTEGER NOT NULL, json TEXT NOT NULL,
                 FOREIGN KEY(batch_id) REFERENCES import_batches(id));
             COMMIT;").map_err(|e| e.to_string())
+    }
+    /// Idempotent migration: only explicit, prevalidated legacy salary plans are supplied.
+    pub fn migrate_salary_plans_once(&mut self,records:&[(String,String)])->Result<(),String>{
+        let tx=self.connection.transaction().map_err(|e|e.to_string())?;
+        let done:Option<String>=tx.query_row("SELECT value FROM app_meta WHERE key='salary_month_migration_v1'",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        if done.is_some(){return Ok(());}
+        for (id,json) in records{tx.execute("INSERT INTO salary_plans(id,json) VALUES(?1,?2)",params![id,json]).map_err(|e|e.to_string())?;}
+        tx.execute("INSERT INTO app_meta(key,value) VALUES('salary_month_migration_v1','done')",[]).map_err(|e|e.to_string())?;
+        audit(&tx,"migrate_salary_plans",&format!("{} plans",records.len()))?;
+        tx.commit().map_err(|e|e.to_string())
     }
     pub fn upsert<T: Serialize>(&mut self, collection: Collection, id: &str, value: &T) -> Result<(), String> {
         if matches!(collection, Collection::Audit) { return Err("审计日志只能由系统写入".into()); }
@@ -253,7 +265,7 @@ impl Session {
                     let current:String=tx.query_row("SELECT json FROM employees WHERE id=?1",[&id],|r|r.get(0)).map_err(|_|format!("员工 {id} 已不存在，无法撤销此批次"))?;
                     let current:serde_json::Value=serde_json::from_str(&current).map_err(|e|e.to_string())?;
                     if current!=expected{return Err(format!("员工 {id} 已被编辑，请先核对后再撤销"));}
-                    for (table,path) in [("salary_plans","$.employee_id"),("calculations","$.employee_id"),("bonuses","$.request.employee_id")]{
+                    for (table,path) in [("contribution_configurations","$.employee_id"),("salary_plans","$.employee_id"),("calculations","$.employee_id"),("bonuses","$.request.employee_id")]{
                         let count:i64=tx.query_row(&format!("SELECT count(*) FROM {table} WHERE json_extract(json,?1)=?2"),params![path,id],|r|r.get(0)).map_err(|e|e.to_string())?;
                         if count>0{return Err(format!("员工 {id} 已有薪酬方案或计算版本，不能撤销基础资料批次"));}
                     }
@@ -296,6 +308,7 @@ mod tests {
         let mut session = store.unlock(&a.id, "password-a").unwrap();
         session.upsert(Collection::Employees, "E001", &serde_json::json!({"name":"甲员工"})).unwrap();
         assert_eq!(session.page::<serde_json::Value>(Collection::Employees, 1, 20).unwrap().total, 1);
+        session.upsert(Collection::ContributionConfigurations,"default",&serde_json::json!({"base":"10000","employee_percent":"5"})).unwrap();
         let encrypted=session.encrypted_database_bytes().unwrap();
         assert!(!encrypted.windows("甲员工".len()).any(|window|window=="甲员工".as_bytes()));
         assert!(!encrypted.starts_with(b"SQLite format 3"));
@@ -310,6 +323,7 @@ mod tests {
         let restored=store.unlock(&a.id,"password-a").unwrap();
         let employee:serde_json::Value=restored.get(Collection::Employees,"E001").unwrap().unwrap();
         assert_eq!(employee["name"],"甲员工");
+        assert_eq!(restored.get::<serde_json::Value>(Collection::ContributionConfigurations,"default").unwrap().unwrap()["base"],"10000");
         drop(restored);
         store.delete_subject(&a.id, "password-a", "甲主体").unwrap();
         assert_eq!(store.list_subjects().unwrap().len(), 1);

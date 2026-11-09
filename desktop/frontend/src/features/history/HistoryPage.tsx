@@ -1,3 +1,4 @@
+import { ConfigurationChanges } from './ConfigurationChanges';
 import { useEffect,useState } from 'react';
 import { ComboSelect } from '../../components/ComboSelect';
 import { DateField } from '../../components/DateField';
@@ -46,11 +47,11 @@ export function HistoryPage(){
  const name=details?.name??people.find(person=>person.employee_id===employeeId)?.name??'';
  const versionLabel=(value:MonthlySnapshot)=>{
   const run=runs.find(run=>run.version_ids.includes(value.id));
-  return `试算 v${run?.version??versions.length-versions.indexOf(value)}${value.id===versions[0]?.id?' · 最新':''}`;
+  return `试算 v${run?.version??versions.length-versions.indexOf(value)}${value.id===versions[0]?.id?' · 最新':''}${value.needs_recalculation?' · 需要重新计算':''}`;
  };
  const money=(value:string|null|undefined)=>value==null?'不可准确测算':`¥${Number(value).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
  const issues=versions.filter(value=>!value.result.withholding||(value.result.net!==null&&Number(value.result.net)<0));
- return <div className="history-page">
+ return <div className="history-page">{mode==='single'&&diff&&<ConfigurationChanges rows={diff.rows}/>}
   <div className="calculation-modes" role="group" aria-label="对比范围"><button aria-pressed={mode==='all'} className={mode==='all'?'active':''} onClick={()=>setMode('all')}>全员对比</button><button aria-pressed={mode==='single'} className={mode==='single'?'active':''} onClick={()=>setMode('single')}>单员工对比</button></div>
   <div className="prototype-form-row">
    <label>所属期<DateField type="month" value={period} onChange={event=>setPeriod(event.target.value)}/></label>

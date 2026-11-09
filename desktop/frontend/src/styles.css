@@ -108,3 +108,19 @@ button{font-size:11px;border-radius:9px;padding:8px 12px}.primary{box-shadow:0 3
 @media(max-width:1200px){.rules-columns{grid-template-columns:190px minmax(0,1fr)}.rules-assist{grid-column:1/-1;grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1000px){.import-layout,.panel:has(>.export-section){grid-template-columns:1fr}.panel:has(>.export-section)>.export-section:nth-of-type(3){border-left:0;padding-left:0}.payroll-metrics,.import-upload-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.rules-columns,.rules-assist{grid-template-columns:1fr}.rules-assist{grid-column:auto}.rule-facts,.payroll-metrics,.payroll-form,.import-upload-grid{grid-template-columns:1fr}}
+
+.employee-config-expanded{padding:20px;background:var(--surface,#f7faff)}
+.employee-config-expanded h3{margin:18px 0 12px}
+
+.badge.config-incomplete{background:#f4f0fb;color:#695295}
+
+.prototype-form-row.employee-config-toolbar{align-items:flex-end}
+
+.badge.recalculation-required,.recalculation-notice{color:#a45b16;background:#fff4e5}.recalculation-notice{border:1px solid #edc99e;border-radius:9px;padding:12px;margin:12px 0}
+
+.contribution-config-table{margin-bottom:16px}
+
+.contribution-row-actions{display:inline-flex;align-items:center;gap:10px}
+.contribution-delete:hover:not(:disabled){background:#bf3737;border-color:#bf3737}
+
+.employee-toggle-row{cursor:pointer}.table-wrap .employee-toggle-row:hover>td{background:#f1f5ff}.employee-toggle-row:focus-visible{outline:2px solid #8fa4ed;outline-offset:-2px}

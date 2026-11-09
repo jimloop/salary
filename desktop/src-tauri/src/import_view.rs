@@ -16,7 +16,9 @@ fn matches(row:&DataRow,filter:&DataFilter)->bool{
  let get=|key:&str|row.fields.get(key).map(String::as_str).unwrap_or("");
  match row.kind.as_str(){
   "Employees"=>true,
-  "SalaryPlans"=>{let start=format!("{}-01",filter.period);let next=chrono::NaiveDate::parse_from_str(&start,"%Y-%m-%d").ok().and_then(|date|date.checked_add_months(chrono::Months::new(1))).map(|date|date.to_string()).unwrap_or_default();get("effective_from")<next.as_str()&&(get("effective_to").is_empty()||get("effective_to")>=start.as_str())},
+  "SalaryPlans"=>get("effective_from").get(..7).unwrap_or("")<=filter.period.as_str()&&(get("effective_to").is_empty()||get("effective_to").get(..7).unwrap_or("")>=filter.period.as_str()),
+  "Social" if get("project").is_empty()=>false,
+  "Social"=>get("start")<=filter.period.as_str()&&(get("end").is_empty()||get("end")>=filter.period.as_str()),
   "TaxHistory"=>get("payout_month")==filter.payout_month,
   "Bonus"=>get("bonus_year")==filter.year,
   _=>get("period")==filter.period
@@ -28,7 +30,7 @@ pub fn data_rows(session:&Session,filter:&DataFilter)->Result<Vec<DataRow>,Strin
  // Storage joins the source batch in the same encrypted subject database.
  let mut result=Vec::new();for value in session.imported_data(!filter.batch_id.is_empty())?{let batch_id=value["batch_id"].as_str().ok_or("导入行缺少批次")?.to_owned();let batch=batches.get(&batch_id);if let Some(batch)=batch{let row:ValidatedRow=serde_json::from_value(value["data"].clone()).map_err(|e|e.to_string())?;let item=DataRow{batch_id,filename:batch["filename"].as_str().unwrap_or("").into(),kind:batch["kind"].as_str().unwrap_or("").into(),sheet:row.sheet,row:row.row,fields:row.fields};if matches(&item,filter){result.push(item)}}}Ok(result)
 }
-fn total_fields(kind:&str)->&'static[&'static str]{match kind{"Employees"|"SalaryPlans"=>&["base_salary"],"Attendance"=>&["standard_days","actual_days","additional_deduction"],"Performance"=>&["performance"],"Adjustments"=>&["adjustment"],"Social"=>&["employee_contribution","employer_contribution"],"TaxHistory"=>&["cumulative_income","cumulative_special_deduction","cumulative_withheld_tax"],"Bonus"=>&["target"],_=>&["gross","net"]}}
+fn total_fields(kind:&str)->&'static[&'static str]{match kind{"Employees"|"SalaryPlans"=>&["base_salary"],"Attendance"=>&["standard_days","actual_days","additional_deduction"],"Performance"=>&["performance"],"Adjustments"=>&["adjustment"],"Social"=>&["base"],"TaxHistory"=>&["cumulative_income","cumulative_special_deduction","cumulative_withheld_tax"],"Bonus"=>&["target"],_=>&["gross","net"]}}
 pub fn overview(session:&Session,filter:&DataFilter)->Result<Vec<UploadStatus>,String>{
  let rows=data_rows(session,filter)?;let kinds=["Employees","SalaryPlans","Attendance","Performance","Social","TaxHistory","Adjustments","Bonus","HistoricalPayroll"];
  kinds.into_iter().map(|kind|{
@@ -40,7 +42,7 @@ pub fn overview(session:&Session,filter:&DataFilter)->Result<Vec<UploadStatus>,S
    for row in &selected{match row.fields.get(*field).and_then(|text|text.replace(',',"").parse::<Decimal>().ok()){Some(number)=>value=value.checked_add(number).ok_or_else(||format!("字段 {field} 汇总超出金额范围"))?,None=>missing_count+=1}}
    Ok(((*field).to_string(),FieldTotal{value,missing_count}))
   }).collect::<Result<BTreeMap<_,_>,String>>()?;
-  Ok(UploadStatus{kind:kind.into(),row_count:selected.len(),batch_count:batches.len(),employee_count:employees.len(),duplicate_count:if ["Employees","SalaryPlans"].contains(&kind){0}else{selected.len().saturating_sub(employees.len())},totals})
+  Ok(UploadStatus{kind:kind.into(),row_count:selected.len(),batch_count:batches.len(),employee_count:employees.len(),duplicate_count:if ["Employees","SalaryPlans","Social"].contains(&kind){0}else{selected.len().saturating_sub(employees.len())},totals})
  }).collect()
 }
 #[derive(Serialize)]pub struct EmployeeImportData{pub employee:Option<crate::app_commands::Employee>,pub groups:BTreeMap<String,Vec<DataRow>>}

@@ -8,10 +8,10 @@ export type RulePackPreview = {rules:Rule[];conflicts:string[]};
 export type Section = 'subjects'|'overview'|'employees'|'items'|'rules'|'imports'|'payroll'|'bonus'|'results'|'history'|'exports';
 export type TaxBaseline = { cumulative_income:string; cumulative_exempt_income:string; cumulative_basic_deduction:string; cumulative_special_deduction:string; cumulative_additional_deduction:string; cumulative_other_deduction:string; cumulative_tax_relief:string; cumulative_withheld_tax:string };
 export type MonthlyRequest = {region?:string; employee_id:string; period:string; payout_month:string; standard_days:string; actual_days:string; performance:string; adjustment:string; employee_deductions:string; employer_contributions:string; tax_baseline:TaxBaseline|null; basic_deduction:string|null; additional_deduction:string|null; other_deduction:string|null; exempt_income:string|null;tax_relief:string|null };
-export type MonthlySnapshot = {applied_rules?:Rule[]; id:string; subject_id:string; employee_id:string; period:string; payout_month:string; fixed_salary:string; performance:string; adjustment:string; result:{gross:string;employee_deductions:string;withholding:{current_withholding:string;cumulative_taxable_base:string}|null;net:string|null;employer_cost:string};input:MonthlyRequest;rule_trace:{code:string;expression:string;inputs:Record<string,string>;result:string}[] };
+export type MonthlySnapshot = {needs_recalculation?:boolean;contributions?:Contribution[]|null;salary_plan?:SalaryPlan|null;applied_rules?:Rule[]; id:string; subject_id:string; employee_id:string; period:string; payout_month:string; fixed_salary:string; performance:string; adjustment:string; result:{gross:string;employee_deductions:string;withholding:{current_withholding:string;cumulative_taxable_base:string}|null;net:string|null;employer_cost:string};input:MonthlyRequest;rule_trace:{code:string;expression:string;inputs:Record<string,string>;result:string}[] };
 export type BatchRequest = { period:string;payout_month:string;region:string;basic_deduction:string;other_deduction:string;exempt_income:string;tax_relief:string };
 export type BatchResult = { run_id:string;run_version:number;version_ids:string[];warnings:string[] };
-export type CalculationRun = { id:string;subject_id:string;period:string;payout_month:string;version:number;kind:string;created_at:number;version_ids:string[] };
+export type CalculationRun = {needs_recalculation?:boolean; id:string;subject_id:string;period:string;payout_month:string;version:number;kind:string;created_at:number;version_ids:string[] };
 export type ImportKind = 'employees'|'attendance'|'performance'|'adjustments'|'tax_history'|'social'|'historical_payroll'|'salary_plans'|'bonus';
 export type ImportPreview = { filename:string; sha256:string; sheets:{name:string;headers:string[];sample:string[][];row_count:number;formula_count:number}[] };
 export type ImportCheck = { total_rows:number;error_count:number;errors:{sheet:string;row:number;field:string;reason:string}[] };
@@ -33,5 +33,10 @@ export type WorkProgress={employee_count:number;import_batch_count:number;defaul
 export type CalculationEmployee={employee_id:string;name:string;department:string;kind:string;version_count:number;latest:MonthlySnapshot};
 export type EmployeeVersions={employee_id:string;name:string;department:string;kind:string;versions:MonthlySnapshot[]};
 export type SalaryMetricDiff={label:string;before:string|null;after:string|null;delta:string|null};
-export type RunComparison={rows:{employee_id:string;name:string;status:'changed'|'same'|'incomplete'|'added'|'removed';metrics:SalaryMetricDiff[]}[];totals:{label:string;before:string;after:string;delta:string|null;missing_before:number;missing_after:number}[]};
+export type RunComparison={rows:{employee_id:string;name:string;status:'changed'|'same'|'incomplete'|'added'|'removed';metrics:SalaryMetricDiff[];configuration_changes?:{project:string;field:string;before:string|null;after:string|null}[]}[];totals:{label:string;before:string;after:string;delta:string|null;missing_before:number;missing_after:number}[]};
 export type EmployeeImportData={employee:Employee|null;groups:Record<string,ImportedDataRow[]>};
+
+export type ContributionConfiguration={id:string;employee_id:string|null;project:string;start:string;end:string|null;enabled:boolean;base:string|null;employee_percent:string|null;employer_percent:string|null};
+export type Contribution={project:string;base:{value:string;source_id:string;scope?:string};employee_percent:{value:string;source_id:string;scope?:string};employer_percent:{value:string;source_id:string;scope?:string};employee_amount:string;employer_amount:string};
+
+export type ConfigurationStatus={configured_count:number;default_count:number;override_count:number;missing_count:number};

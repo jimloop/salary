@@ -4,7 +4,7 @@ import { useWorkspacePeriod } from '../../components/WorkspacePeriod';
 import { PageAction } from '../../components/PageAction';
 import { TaskDialog } from '../../components/TaskDialog';
 import { AuditPanel } from '../history/AuditPanel';
-import { useEffect,useState } from 'react';
+import { useEffect,useRef,useState } from 'react';
 import { open,save } from '@tauri-apps/plugin-dialog';
 import { api } from '../../api';
 import type { CalculationRun, Subject } from '../../types';
@@ -19,7 +19,7 @@ export function ExportsPage({subject,onLock,onFeedback}:{subject:Subject;onLock:
   const [password,setPassword]=useState('');
   const [confirmedName,setConfirmedName]=useState('');
   const [error,setError]=useState('');
-  const [busy,setBusy]=useState(false);
+  const [busy,setBusy]=useState(false);const submitting=useRef(false);
   const [queryRefresh,setQueryRefresh]=useState(0);
   const [auditRefresh,setAuditRefresh]=useState(0);
 
@@ -34,10 +34,10 @@ export function ExportsPage({subject,onLock,onFeedback}:{subject:Subject;onLock:
 
   const selectedRun=runs.find(value=>value.id===selectedRunId&&value.period===period&&value.payout_month===payoutMonth);
   const run=async(work:()=>Promise<string>)=>{
-    setBusy(true);setError('');
+    if(submitting.current)return;submitting.current=true;setBusy(true);setError('');
     try{onFeedback(await work());setAuditRefresh(value=>value+1);setAuth(null);setPassword('');}
     catch(reason){setError(String(reason));}
-    finally{setBusy(false);}
+    finally{submitting.current=false;setBusy(false);}
   };
   const exportCsv=()=>run(async()=>{
     if(!selectedRun)throw new Error('请先选择试算版本');
@@ -67,6 +67,8 @@ export function ExportsPage({subject,onLock,onFeedback}:{subject:Subject;onLock:
     return '备份已恢复，请重新解锁工作空间';
   });
 
+  const confirmationDisabled=busy||!password||(auth==='restore'&&confirmedName!==subject.name)||((auth==='xlsx'||auth==='csv')&&!selectedRun);
+  const confirmAuth=()=>{if(confirmationDisabled)return;void (auth==='xlsx'?exportXlsx:auth==='csv'?exportCsv:auth==='backup'?backup:restore)()};
   return <>
     <PageAction><button className="primary" disabled={!selectedRun||busy} onClick={()=>setAuth(format)}>导出计算明细</button></PageAction>
     <div className="exports-stack">
@@ -77,7 +79,7 @@ export function ExportsPage({subject,onLock,onFeedback}:{subject:Subject;onLock:
           <label>计划发放月<DateField type="month" value={payoutMonth} onChange={event=>setPayoutMonth(event.target.value)}/></label>
           <label>试算版本<ComboSelect value={selectedRun?.id??''} disabled={!runs.length} onChange={event=>setSelectedRunId(event.target.value)}>
             {!runs.length&&<option value="">{loadingRuns?'正在读取…':'暂无试算版本'}</option>}
-            {runs.map((value,index)=><option key={value.id} value={value.id}>试算 v{value.version}{index===0?' · 最新':''} · {value.version_ids.length} 人{value.kind==='single'?' · 单人':''}</option>)}
+            {runs.map((value,index)=><option key={value.id} value={value.id}>试算 v{value.version}{index===0?' · 最新':''} · {value.version_ids.length} 人{value.kind==='single'?' · 单人':''}{value.needs_recalculation?' · 需要重新计算':''}</option>)}
           </ComboSelect></label>
           <label>文件内容<ComboSelect value={format} onChange={event=>setFormat(event.target.value as 'xlsx'|'csv')}><option value="xlsx">工资核算 XLSX（5 张表）</option><option value="csv">员工明细 CSV</option></ComboSelect></label>
         </div>
@@ -96,9 +98,9 @@ export function ExportsPage({subject,onLock,onFeedback}:{subject:Subject;onLock:
     {error&&!auth&&<div className="form-error" role="alert">{error}</div>}
     {auth&&<TaskDialog title={auth==='restore'?'恢复主体备份':auth==='backup'?'创建加密备份':'验证并导出'} onClose={()=>{setAuth(null);setPassword('');setError('')}}>
       {(auth==='xlsx'||auth==='csv')&&selectedRun&&<p className="prototype-helper">试算 v{selectedRun.version} · {selectedRun.version_ids.length} 名员工 · {auth==='xlsx'?'工资核算 XLSX（5 张表）':'员工明细 CSV'}</p>}
-      <div className="form-grid"><label className="wide">当前主体密码<input type="password" autoComplete="off" value={password} onChange={event=>setPassword(event.target.value)}/></label>{auth==='restore'&&<label className="wide">输入主体名称确认<input value={confirmedName} onChange={event=>setConfirmedName(event.target.value)} placeholder={subject.name}/></label>}</div>
+      <div className="form-grid"><label className="wide">当前主体密码<input type="password" disabled={busy} onKeyDown={event=>{if(event.key==='Enter'&&!event.nativeEvent.isComposing&&!event.repeat){event.preventDefault();confirmAuth()}}} autoComplete="off" value={password} onChange={event=>setPassword(event.target.value)}/></label>{auth==='restore'&&<label className="wide">输入主体名称确认<input value={confirmedName} onChange={event=>setConfirmedName(event.target.value)} placeholder={subject.name}/></label>}</div>
       {error&&<div className="form-error" role="alert">{error}</div>}
-      <div className="dialog-actions"><button onClick={()=>setAuth(null)}>取消</button><button className="primary" disabled={busy||!password||(auth==='restore'&&confirmedName!==subject.name)||((auth==='xlsx'||auth==='csv')&&!selectedRun)} onClick={auth==='xlsx'?exportXlsx:auth==='csv'?exportCsv:auth==='backup'?backup:restore}>{busy?'处理中…':'验证并继续'}</button></div>
+      <div className="dialog-actions"><button onClick={()=>setAuth(null)}>取消</button><button className="primary" disabled={confirmationDisabled} onClick={confirmAuth}>{busy?'处理中…':'验证并继续'}</button></div>
     </TaskDialog>}
   </>;
 }

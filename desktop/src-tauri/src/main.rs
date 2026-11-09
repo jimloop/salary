@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_commands;
+mod contribution_config;
 mod backup;
 mod batch;
 mod import_inputs;
@@ -32,6 +33,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             app_commands::subjects_list, app_commands::subjects_create, app_commands::subjects_unlock,
             app_commands::subjects_lock, app_commands::subjects_delete,
+            contribution_config::contribution_configuration_delete, contribution_config::contribution_configurations, contribution_config::contribution_configuration_save, contribution_config::contribution_preview, contribution_config::contribution_status, contribution_config::salary_effective,
             app_commands::employees_page, app_commands::employees_save,
             app_commands::salary_plans_page, app_commands::salary_plans_save,
             calculation_view::calculation_employees_page, calculation_view::calculation_employee_versions, app_commands::items_page, app_commands::items_save,
