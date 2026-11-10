@@ -2,6 +2,15 @@
 
 离线桌面薪酬计算应用，当前版本 **0.3.21**。主程序采用 Tauri 2、React/TypeScript 与 Rust；每个主体使用独立 SQLCipher 工作空间。旧 Python 桌面版及旧 HTML 界面已移除。
 
+## 使用指南
+
+完整图文指南适用于 **0.3.21**，共 19 页、19 张界面图，覆盖安装、主体与员工配置、工资方案、社保公积金、数据导入、月薪与年终奖试算、版本复核、导出及备份恢复，并附每月检查清单和常见问题。
+
+- [PDF 阅读版](docs/薪酬计算助手使用指南_0.3.21.pdf)
+- [Word 可编辑版](docs/薪酬计算助手使用指南_0.3.21.docx)
+
+使用指南和配置实施计划统一放在 `docs/` 目录。指南截图采用虚构资料，其中的金额与比例仅作操作演示。
+
 ## 在另一台电脑继续开发
 
 先安装 Git、Node.js 22（版本见 `.nvmrc`）、Rust/rustup 和系统构建工具：macOS 需要 Xcode Command Line Tools；Windows 需要 Visual Studio C++ 构建工具和 WebView2。Rust 版本由 `rust-toolchain.toml` 固定。
@@ -49,6 +58,7 @@ cargo tauri dev --config '{"build":{"devUrl":"http://127.0.0.1:5173"}}'
 | `crates/payroll-import/` | CSV/XLSX 等读取、字段映射与业务校验 |
 | `crates/payroll-storage/` | 按主体 SQLCipher 存储、事务和分页 |
 | `tests/fixtures/mock-payroll/` | 通用虚构双主体测试样本和独立预期结果 |
+| `docs/` | 图文使用指南及薪酬与社保公积金配置实施计划 |
 | `prototype/`、`DESIGN_SYSTEM.md` | 原型与设计参考 |
 | `WORKFLOW.md`、`IMPLEMENTATION_STATUS.md` | 产品流程、现状与待办 |
 
